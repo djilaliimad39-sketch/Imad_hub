@@ -1,0 +1,455 @@
+-- DeltaCombined.lua
+-- سكربت واحد مدموج للعمل عبر executors مثل Delta أو داخل Roblox Studio
+-- التحذير: استخدام سكربتات تتفاعل مع Remotes قد يعرّض حسابك للحظر. استخدم للاختبار فقط.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VirtualUser = game:GetService("VirtualUser")
+local LocalPlayer = Players.LocalPlayer
+
+-- Helper: اختيار Parent للـ GUI حسب البيئة (Delta/gethui أو PlayerGui)
+local function getGuiParent()
+    if type(gethui) == "function" then
+        local ok, res = pcall(gethui)
+        if ok and res then
+            -- إذا كانت syn.protect_gui موجودة نحاول حمايته
+            if type(syn) == "table" and type(syn.protect_gui) == "function" then
+                pcall(function() syn.protect_gui(res) end)
+            end
+            return res
+        end
+    end
+    -- fallback إلى PlayerGui
+    if LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui") then
+        return LocalPlayer.PlayerGui
+    end
+    -- أخيراً CoreGui (قد لا يعمل في بعض البيئات)
+    return game:GetService("CoreGui")
+end
+
+-- Combined object
+local Combined = {}
+Combined._conns = {}
+Combined._conns1 = {}
+Combined._conns2 = {}
+Combined.running1 = false
+Combined.running2 = false
+Combined.Weapons = {}
+
+local function safeRequire(obj)
+    if not obj then return nil end
+    local ok, res = pcall(function() return require(obj) end)
+    if ok then return res end
+    return nil
+end
+
+-- ===== Script 1 functions (مشتق من السكربت الأول) =====
+function Combined.stopScript1(cleanAll)
+    -- أولاً نفصل الاتصالات الخاصة بالسكربت 1
+    Combined.running1 = false
+    _G.AutoSetSpawn = false
+    _G.EquipMelee = false
+    _G.AutoNew = false
+    _G.FastAttack = false
+
+    for _, c in ipairs(Combined._conns1) do
+        if c and c.Connected then
+            pcall(function() c:Disconnect() end)
+        end
+    end
+    if cleanAll ~= false then
+        Combined._conns1 = {}
+    end
+end
+
+function Combined.startScript1()
+    -- نظف أي اتصالات قديمة أولاً
+    Combined.stopScript1(true)
+
+    if Combined.running1 then return end
+    Combined.running1 = true
+
+    if _G.AutoSetSpawn == nil then _G.AutoSetSpawn = false end
+    if _G.EquipMelee == nil then _G.EquipMelee = false end
+    if _G.AutoNew == nil then _G.AutoNew = false end
+    if _G.FastAttack == nil then _G.FastAttack = false end
+
+    -- Set spawn point loop
+    local c1 = RunService.Heartbeat:Connect(function()
+        if not Combined.running1 then return end
+        if _G.AutoSetSpawn then
+            pcall(function()
+                local char = LocalPlayer and LocalPlayer.Character
+                if char and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
+                    if ReplicatedStorage and ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("CommF_") then
+                        pcall(function()
+                            ReplicatedStorage.Remotes.CommF_:InvokeServer("SetSpawnPoint")
+                        end)
+                    end
+                end
+            end)
+        end
+    end)
+    table.insert(Combined._conns1, c1)
+
+    -- Equip Melee loop
+    local c2 = RunService.Heartbeat:Connect(function()
+        if not Combined.running1 then return end
+        pcall(function()
+            if _G.EquipMelee then
+                local bp = LocalPlayer and LocalPlayer:FindFirstChild("Backpack")
+                if bp then
+                    for _, v in pairs(bp:GetChildren()) do
+                        if v and v:IsA("Tool") and v.ToolTip == "Melee" then
+                            local tool = bp:FindFirstChild(v.Name)
+                            if tool and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+                                task.wait(0.4)
+                                pcall(function() LocalPlayer.Character.Humanoid:EquipTool(tool) end)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end)
+    table.insert(Combined._conns1, c2)
+
+    -- AutoNew toggle loop
+    local c3 = RunService.Heartbeat:Connect(function()
+        if not Combined.running1 then return end
+        pcall(function()
+            if _G.AutoNew == true then
+                if _G.SelectWeapon == nil then _G.EquipMelee = true end
+            else
+                _G.EquipMelee = false
+            end
+        end)
+    end)
+    table.insert(Combined._conns1, c3)
+
+    -- CombatFramework manipulation (إن وُجد)
+    local CombatFramework = safeRequire(LocalPlayer and LocalPlayer:FindFirstChild("PlayerScripts") and LocalPlayer.PlayerScripts:FindFirstChild("CombatFramework") or nil)
+    local CameraShaker = safeRequire(ReplicatedStorage and ReplicatedStorage:FindFirstChild("Util") and ReplicatedStorage.Util:FindFirstChild("CameraShaker") or nil)
+
+    local lastClick = 0
+    if CombatFramework then
+        local c4 = RunService.Heartbeat:Connect(function()
+            if not Combined.running1 then return end
+            if _G.FastAttack then
+                pcall(function()
+                    local active = CombatFramework.activeController
+                    if active then
+                        active.attacking = false
+                        active.blocking = false
+                        active.timeToNextAttack = tick() - 1
+                        active.timeToNextBlock = 0
+                        active.increment = 3
+                        active.hitboxMagnitude = 120
+                    end
+                    local char = LocalPlayer and LocalPlayer.Character
+                    if char then
+                        if char:FindFirstChild("Stun") then pcall(function() char.Stun.Value = 0 end) end
+                        if char:FindFirstChild("Humanoid") then pcall(function() char.Humanoid.Sit = false end) end
+                    end
+                    if tick() - lastClick > 0.08 then
+                        lastClick = tick()
+                        VirtualUser:CaptureController()
+                        VirtualUser:Button1Down(Vector2.new(1280, 672))
+                    end
+                    if CameraShaker and CameraShaker.Stop then pcall(function() CameraShaker:Stop() end) end
+                end)
+            end
+        end)
+        table.insert(Combined._conns1, c4)
+    end
+
+    -- Rapid click loop (debounced)
+    local c5 = RunService.Heartbeat:Connect(function()
+        if not Combined.running1 then return end
+        if _G.FastAttack then
+            pcall(function()
+                if tick() - lastClick > 0.08 then
+                    lastClick = tick()
+                    VirtualUser:CaptureController()
+                    VirtualUser:Button1Down(Vector2.new(1280, 672))
+                end
+            end)
+        end
+    end)
+    table.insert(Combined._conns1, c5)
+
+    -- جمع أسماء الأسلحة مرة واحدة
+    pcall(function()
+        Combined.Weapons = {}
+        local bp = LocalPlayer and LocalPlayer:FindFirstChild("Backpack")
+        if bp then
+            for _, v in pairs(bp:GetChildren()) do
+                if v:IsA("Tool") then table.insert(Combined.Weapons, v.Name) end
+            end
+        end
+        local char = LocalPlayer and LocalPlayer.Character
+        if char then
+            for _, v in pairs(char:GetChildren()) do
+                if v:IsA("Tool") then table.insert(Combined.Weapons, v.Name) end
+            end
+        end
+    end)
+end
+
+-- ===== Script 2 (CheckQuest + EquipWeapon + loops) =====
+local function CheckQuest()
+    local ok, res = pcall(function()
+        local MyLevel
+        if LocalPlayer and LocalPlayer:FindFirstChild("Data") and LocalPlayer.Data:FindFirstChild("Level") then
+            MyLevel = LocalPlayer.Data.Level.Value
+        else
+            return nil
+        end
+
+        local Ms, QuestName, QuestNumber, NameMon, CFrameQuest, CFrameMon
+        local OldWorld = _G.OldWorld
+        local NewWorld = _G.NewWorld
+        local ThreeWorld = _G.ThreeWorld
+
+        if OldWorld then
+            if MyLevel == 1 or MyLevel <= 9 then
+                Ms = "Bandit [Lv. 5]"; QuestName = "BanditQuest1"; QuestNumber = 1; NameMon = "Bandit"
+                CFrameQuest = CFrame.new(1060.9383544922, 16.455066680908, 1547.7841796875)
+                CFrameMon = CFrame.new(1038.5533447266, 41.296249389648, 1576.5098876953)
+            elseif MyLevel == 10 or MyLevel <= 14 then
+                Ms = "Monkey [Lv. 14]"; QuestName = "JungleQuest"; QuestNumber = 1; NameMon = "Monkey"
+                CFrameQuest = CFrame.new(-1604.12012, 36.8521118, 154.23732)
+                CFrameMon = CFrame.new(-1448.1446533203, 50.851993560791, 63.60718536377)
+            -- يمكنك إضافة بقية مستويات OldWorld هنا كما تريد
+            end
+        end
+
+        if NewWorld then
+            -- شروط NewWorld (أكمل حسب بيانات اللعبة)
+        end
+
+        if ThreeWorld then
+            -- شروط ThreeWorld (أكمل حسب بيانات اللعبة)
+        end
+
+        return {
+            Ms = Ms,
+            QuestName = QuestName,
+            QuestNumber = QuestNumber,
+            NameMon = NameMon,
+            CFrameQuest = CFrameQuest,
+            CFrameMon = CFrameMon
+        }
+    end)
+    if ok then return res end
+    return nil
+end
+
+local script2Conns = {}
+function Combined.startScript2()
+    if Combined.running2 then return end
+    Combined.running2 = true
+
+    if _G.AutoFarm == nil then _G.AutoFarm = false end
+    if _G.AutoQuest == nil then _G.AutoQuest = false end
+
+    local c = RunService.Heartbeat:Connect(function()
+        if not Combined.running2 then return end
+        pcall(function()
+            local info = CheckQuest()
+            if _G.AutoFarm then
+                _G.FastAttack = true
+                _G.Main = true
+                -- هنا يمكن إضافة منطق التحرك/القتل/المهام حسب بنية اللعبة
+            else
+                _G.FastAttack = _G.FastAttack or false
+            end
+            if _G.AutoQuest then
+                -- تنفيذ آلي للمهمة: أضف منطق التفاعل مع NPCs/Remotes هنا
+            end
+        end)
+    end)
+    table.insert(script2Conns, c)
+end
+
+function Combined.stopScript2()
+    Combined.running2 = false
+    for _, c in pairs(script2Conns) do
+        if c and c.Connected then
+            pcall(function() c:Disconnect() end)
+        end
+    end
+    script2Conns = {}
+end
+
+function Combined.ToggleAutoFarm(val) _G.AutoFarm = not not val end
+function Combined.ToggleAutoQuest(val) _G.AutoQuest = not not val end
+
+-- ===== GUI creation =====
+local guiParent = getGuiParent()
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "DeltaControlPanelGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = guiParent
+
+-- attempt to protect gui if function exists
+if type(syn) == "table" and type(syn.protect_gui) == "function" then
+    pcall(function() syn.protect_gui(screenGui) end)
+end
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 420, 0, 320)
+frame.AnchorPoint = Vector2.new(0.5,0.5)
+frame.Position = UDim2.new(0.5, 0, 0.5, 0) -- صححت الإزاحة هنا
+frame.BackgroundColor3 = Color3.fromRGB(245,245,250)
+frame.BorderSizePixel = 0
+frame.Parent = screenGui
+frame.Visible = false
+
+local uicorner = Instance.new("UICorner", frame)
+uicorner.CornerRadius = UDim.new(0, 12)
+
+local title = Instance.new("TextLabel", frame)
+title.Size = UDim2.new(1, -24, 0, 36)
+title.Position = UDim2.new(0, 12, 0, 12)
+title.Text = "لوحة تحكم السكربتات (Delta)"
+title.TextColor3 = Color3.fromRGB(30,30,30)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+title.TextSize = 18
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+local closeBtn = Instance.new("TextButton", frame)
+closeBtn.Size = UDim2.new(0, 80, 0, 32)
+closeBtn.Position = UDim2.new(1, -92, 0, 12)
+closeBtn.Text = "إغلاق"
+closeBtn.BackgroundColor3 = Color3.fromRGB(43,110,246)
+closeBtn.TextColor3 = Color3.fromRGB(255,255,255)
+closeBtn.Font = Enum.Font.Gotham
+closeBtn.TextSize = 14
+local cbCorner = Instance.new("UICorner", closeBtn)
+cbCorner.CornerRadius = UDim.new(0,8)
+closeBtn.MouseButton1Click:Connect(function() frame.Visible = false end)
+
+local statusLabel = Instance.new("TextLabel", frame)
+statusLabel.Size = UDim2.new(1, -32, 0, 28)
+statusLabel.Position = UDim2.new(0, 16, 0, 56)
+statusLabel.BackgroundTransparency = 1
+statusLabel.TextColor3 = Color3.fromRGB(80,80,80)
+statusLabel.Text = "حالة: جاهز"
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 14
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local function makeButton(text, posY)
+    local b = Instance.new("TextButton", frame)
+    b.Size = UDim2.new(0, 180, 0, 40)
+    b.Position = UDim2.new(0, 16, 0, posY)
+    b.BackgroundColor3 = Color3.fromRGB(255,255,255)
+    b.TextColor3 = Color3.fromRGB(20,20,20)
+    b.Text = text
+    b.Font = Enum.Font.Gotham
+    b.TextSize = 14
+    local c = Instance.new("UICorner", b)
+    c.CornerRadius = UDim.new(0,8)
+    return b
+end
+
+local start1 = makeButton("تشغيل السكربت 1", 96)
+local stop1  = makeButton("إيقاف السكربت 1", 150)
+local start2 = makeButton("تشغيل السكربت 2", 204)
+local stop2  = makeButton("إيقاف السكربت 2", 258)
+local autoFarmBtn = makeButton("AutoFarm: إيقاف", 96+220)
+local autoQuestBtn = makeButton("AutoQuest: إيقاف", 150+220)
+
+-- Drag toggle button
+local dragBtn = Instance.new("TextButton", screenGui)
+dragBtn.Name = "DragToggle"
+dragBtn.Size = UDim2.new(0,48,0,48)
+dragBtn.Position = UDim2.new(1, -66, 1, -66)
+dragBtn.Text = "≡"
+dragBtn.BackgroundColor3 = Color3.fromRGB(255,255,255)
+dragBtn.BorderSizePixel = 0
+dragBtn.AutoButtonColor = true
+dragBtn.TextColor3 = Color3.fromRGB(35,35,35)
+dragBtn.Font = Enum.Font.Gotham
+dragBtn.TextSize = 22
+local dbCorner = Instance.new("UICorner", dragBtn)
+dbCorner.CornerRadius = UDim.new(1, 0)
+
+-- Dragging logic (يحرك الـ frame الآن)
+local dragging = false
+local dragStart = nil
+local startPos = nil
+dragBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = frame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+        end)
+    end
+end)
+dragBtn.InputChanged:Connect(function(input)
+    if dragging and input then
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+dragBtn.MouseButton1Click:Connect(function() frame.Visible = not frame.Visible end)
+
+-- UI update
+local function updateStatus()
+    local s = {}
+    s[#s+1] = "Script1: " .. (Combined.running1 and "قيد التشغيل" or "متوقف")
+    s[#s+1] = "Script2: " .. (Combined.running2 and "قيد التشغيل" or "متوقف")
+    s[#s+1] = "AutoFarm: " .. tostring(_G.AutoFarm or false)
+    s[#s+1] = "AutoQuest: " .. tostring(_G.AutoQuest or false)
+    statusLabel.Text = table.concat(s, "  |  ")
+    autoFarmBtn.Text = "AutoFarm: " .. ((_G.AutoFarm and "تشغيل") or "إيقاف")
+    autoQuestBtn.Text = "AutoQuest: " .. ((_G.AutoQuest and "تشغيل") or "إيقاف")
+end
+
+-- Buttons events
+start1.MouseButton1Click:Connect(function()
+    pcall(function() Combined.startScript1() end)
+    updateStatus()
+end)
+stop1.MouseButton1Click:Connect(function()
+    pcall(function() Combined.stopScript1() end)
+    updateStatus()
+end)
+start2.MouseButton1Click:Connect(function()
+    pcall(function() Combined.startScript2() end)
+    updateStatus()
+end)
+stop2.MouseButton1Click:Connect(function()
+    pcall(function() Combined.stopScript2() end)
+    updateStatus()
+end)
+autoFarmBtn.MouseButton1Click:Connect(function()
+    _G.AutoFarm = not _G.AutoFarm
+    Combined.ToggleAutoFarm(_G.AutoFarm)
+    updateStatus()
+end)
+autoQuestBtn.MouseButton1Click:Connect(function()
+    _G.AutoQuest = not _G.AutoQuest
+    Combined.ToggleAutoQuest(_G.AutoQuest)
+    updateStatus()
+end)
+
+-- Periodic UI update
+task.spawn(function()
+    while true do
+        task.wait(1)
+        pcall(updateStatus)
+    end
+end)
+
+-- default hidden
+frame.Visible = false
+
+-- Return Combined for REPL/use (إذا رغبت باستدعاءه من الخارج)
+return Combined

@@ -1,11 +1,150 @@
-local themes = {
-    Background = Color3.fromRGB(24, 24, 24),
-    Glow = Color3.fromRGB(0, 0, 0),
-    Accent = Color3.fromRGB(10, 10, 10),
-    LightContrast = Color3.fromRGB(20, 20, 20),
-    DarkContrast = Color3.fromRGB(14, 14, 14),  
-    TextColor = Color3.fromRGB(255, 255, 255)
-    }
+-- ضع هذا المقطع في أعلى ملف Dji.lua (قبل أي استخدام لـ `venyx`)
+-- وظيفته: يضمن وجود Parent صالح للـ GUI في بيئات متنوعة (exploit executors / Studio)
+-- ويزود "fallback" بسيط لمكتبة venyx لو لم تكن محملة — هذا يحل مشكلة "الواجهة لا تظهر".
+-- لا يغيّر من منطق اللعبة، فقط يوفر واجهة مرئية بسيطة متوافقة.
+
+local function getGuiParent()
+    -- حاول gethui (Delta / بعض الـ executors)
+    if type(gethui) == "function" then
+        local ok, res = pcall(gethui)
+        if ok and res then
+            -- حاول حماية الـ GUI إن كانت البيئة تدعم syn.protect_gui
+            if type(syn) == "table" and type(syn.protect_gui) == "function" then
+                pcall(syn.protect_gui, res)
+            end
+            return res
+        end
+    end
+
+    -- fallback إلى PlayerGui إن وجد
+    local Players = game:GetService("Players")
+    local lp = Players and Players.LocalPlayer
+    if lp and lp:FindFirstChild("PlayerGui") then
+        return lp.PlayerGui
+    end
+
+    -- أخيراً CoreGui كحل أخير (قد لا يعمل في بعض البيئات)
+    return game:GetService("CoreGui")
+end
+
+-- إذا كانت مكتبة venyx غير معرفة، نصنع "fallback" بسيط يضمن ظهور الواجهة
+if not venyx then
+    local guiParent = getGuiParent()
+
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "Dji_Venyx_Fallback"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = guiParent
+
+    pcall(function()
+        if type(syn) == "table" and type(syn.protect_gui) == "function" then
+            syn.protect_gui(screenGui)
+        end
+    end)
+
+    -- إطار مركزي بسيط للعرض
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Name = "DjiMainFrame"
+    mainFrame.Size = UDim2.new(0, 420, 0, 320)
+    mainFrame.Position = UDim2.new(0.5, -210, 0.5, -160)
+    mainFrame.AnchorPoint = Vector2.new(0,0)
+    mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    mainFrame.BorderSizePixel = 0
+    mainFrame.Parent = screenGui
+    mainFrame.Visible = true
+
+    local uic = Instance.new("UICorner", mainFrame)
+    uic.CornerRadius = UDim.new(0, 8)
+
+    local title = Instance.new("TextLabel", mainFrame)
+    title.Size = UDim2.new(1, -24, 0, 36)
+    title.Position = UDim2.new(0, 12, 0, 8)
+    title.BackgroundTransparency = 1
+    title.Text = "Dji UI (fallback)"
+    title.TextColor3 = Color3.fromRGB(230,230,230)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 18
+    title.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- منطقة لوضع الأزرار/التبديلات
+    local content = Instance.new("Frame", mainFrame)
+    content.Name = "Content"
+    content.Size = UDim2.new(1, -24, 1, -56)
+    content.Position = UDim2.new(0, 12, 0, 48)
+    content.BackgroundTransparency = 1
+
+    -- بسيط: قائمة عمودية لوضع عناصر الواجهة
+    local function makeButton(parent, text, y)
+        local b = Instance.new("TextButton", parent)
+        b.Size = UDim2.new(1, 0, 0, 30)
+        b.Position = UDim2.new(0, 0, 0, y)
+        b.BackgroundColor3 = Color3.fromRGB(43,110,246)
+        b.TextColor3 = Color3.fromRGB(255,255,255)
+        b.Text = text
+        b.Font = Enum.Font.Gotham
+        b.TextSize = 14
+        local c = Instance.new("UICorner", b)
+        c.CornerRadius = UDim.new(0, 6)
+        return b
+    end
+
+    local function makeToggle(parent, text, default, y, callback)
+        local btn = Instance.new("TextButton", parent)
+        btn.Size = UDim2.new(1, 0, 0, 28)
+        btn.Position = UDim2.new(0, 0, 0, y)
+        btn.BackgroundColor3 = Color3.fromRGB(35,35,35)
+        btn.TextColor3 = Color3.fromRGB(230,230,230)
+        btn.Text = text .. ": " .. (default and "ON" or "OFF")
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 14
+        local c = Instance.new("UICorner", btn)
+        c.CornerRadius = UDim.new(0,6)
+        local state = default or false
+        btn.MouseButton1Click:Connect(function()
+            state = not state
+            btn.Text = text .. ": " .. (state and "ON" or "OFF")
+            pcall(function() callback(state) end)
+        end)
+        -- نداء أولي لحالة البداية داخل pcall
+        pcall(function() callback(state) end)
+        return btn
+    end
+
+    -- الصيغة البسيطة لمكتبة venyx
+    venyx = {}
+    function venyx:addPage(name, icon)
+        local page = {}
+        page._nextY = 0
+        function page:addSection(sectionName)
+            local section = {}
+            section.frame = Instance.new("Frame", content)
+            section.frame.Size = UDim2.new(1, 0, 0, 0) -- سيتوسع حسب المحتوى
+            section.frame.BackgroundTransparency = 1
+            section._y = page._nextY
+            page._nextY = page._nextY + 6
+
+            function section:addToggle(label, default, cb)
+                local t = makeToggle(content, label, default, section._y, cb)
+                section._y = section._y + 34
+                page._nextY = page._nextY + 34
+                return t
+            end
+
+            function section:addButton(label, cb)
+                local b = makeButton(content, label, section._y)
+                section._y = section._y + 36
+                page._nextY = page._nextY + 36
+                b.MouseButton1Click:Connect(function() pcall(cb) end)
+                return b
+            end
+
+            return section
+        end
+        return page
+    end
+end
+
+-- انتهى مقطع التوافق: الآن يمكنك تشغيل سكربتك كما هو (venyx متوفر وإلا سيستخدم الـ fallback)
 
 local page = venyx:addPage("Main", 5012540623)
 local section1 = page:addSection("Auto Farm")
